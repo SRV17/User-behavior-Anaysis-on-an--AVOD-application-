@@ -1,0 +1,311 @@
+---
+title: "Tubi TV - Data Analysis"
+author: "Raghu Vamsy Sirasala"
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r setup1, include=FALSE}
+library(dplyr)
+library(highcharter)
+library(tidyr)
+Data <- as.data.frame(read.csv("/Users/anusha.ambati/Downloads/Exercise/tubitv_sample_dataset.csv"))
+Data <- Data %>% filter(!(movie_total_viewtime < 0 | series_total_viewtime < 0))
+Data$session_length <- Data$movie_total_viewtime+Data$series_total_viewtime+90
+```
+
+```{r setup2, include = FALSE}
+Data$session_start_ts <- as.Date(Data$session_start_ts)
+Data[is.na(Data)] <- 0
+TimeLine <- Data[2:6] %>% 
+                group_by(session_start_ts) %>%
+                mutate_all(funs(round(. / (60*60), 2))) %>%
+                summarise_each(funs(sum)) %>%
+                mutate(movie_percentage_cast = round((movie_cast_time/movie_total_viewtime) *100, 2) ) %>%
+                mutate(series_percentage_cast = round((series_cast_time/series_total_viewtime) *100, 2) )
+```
+
+```{r setup3, include=FALSE}
+UserData <- Data[c(1,3:8)] %>%
+  group_by(userid) %>%
+  summarise_each(funs(sum)) %>%
+  mutate(movie_percentage_cast = round((movie_cast_time/movie_total_viewtime) *100, 2) ) %>%
+  mutate(series_percentage_cast = round((series_cast_time/series_total_viewtime) *100, 2) ) 
+
+UserData <- UserData %>% filter(!(is.nan(movie_percentage_cast) == TRUE | is.nan(series_percentage_cast) == TRUE)) %>%
+                          filter(movie_percentage_cast <= 100 | series_percentage_cast <= 100)
+
+UserData[2:5] <- UserData[2:5]/(60*60)
+```
+
+
+
+## Introduction
+
+This analysis is about analysing user casting behavior using Tubitv app. The data used in this is event log data of users from Tubitv app. This observations could help us in understanding the patterns about casting behavior and help us take necessary steps to improve the overall experience for our customers.
+
+##Assumptions made in the analysis:
+
+After carefully  scrutinizing the data I found some discrepancies in the data collection and the way they were measured or logged into the database.
+
+##Problems:
+
+**1.movie_total_viewtime = cast_total_viewtime:**
+
+Almost all rows have equal moview view time and cast time which is not true in the real case scenario but assumed it as true. 
+
+**2.Missing series and movies total starts:**
+
+Some cases had significant movie and series view time but no movie starts or series starts and vice-versa. 
+
+- Assumed 1 in the total movies startes where it was missing and In the case where there   were movie or series starts but no view time,  an average of 90 seconds browsing value was added by creating a separate column called session length.
+
+- Session_length = movie_total_viewtime + series_total_viewtime + 90seconds of browsing time
+
+**3.Cast time > view time**
+
+Some cases had cast time greater than their total movie or series view time which is technically and logically not possible. 
+
+
+- Ignored these cases.
+
+**4.Negative time values**
+
+Some cases had negative time values for the fields of total movie view time and cseries view time. 
+
+- Ignored those cases.
+
+##Initial Analysis
+
+#### New Users Vs. Returning Users
+
+This pie chart displays the percentage of users returning to our app or webiste versus the new users. We can see that a significant percent of users like our app and are using it often. But this doesn't tell us anything about casting behavior. so lets deep dive!
+
+```{r, echo=FALSE}
+UserGroup <- as.data.frame(table(Data$userid))
+UserGroup$Type <- ifelse(UserGroup$Freq > 1, "Returning", "New")
+View(UserGroup) 
+hchart(UserGroup$Type, "pie")
+```
+
+
+#### Session Data
+
+- The session length have been divided into different groups to analyze the average session length and how many of them are casting. 
+
+- Conventionally, the casting performance could be proportional to the length of session. If a user is continously watching videos using our app for a significant amount of time there are chances of him casting it at their respective places. 
+
+- But from this graph we can see that, although maximum of our users use our app for a significant amount of time they haven't casted them to tvs. There's a significant difference. 
+
+```{r, echo = FALSE}
+Sessions <- Data[c(1,3:8)] %>%
+  group_by(userid) %>%
+  summarise_each(funs(sum)) 
+
+Sessions$duration <- 
+  ifelse(((Sessions$movie_total_viewtime > 0 & Sessions$movie_total_viewtime <= 10)|(Sessions$series_total_viewtime >0 & Sessions$series_total_viewtime <= 10)),"0-10",
+         ifelse(((Sessions$movie_total_viewtime > 10 & Sessions$movie_total_viewtime <= 30)|(Sessions$series_total_viewtime > 10 & Sessions$series_total_viewtime <= 30)), "11-30",
+                ifelse(((Sessions$movie_total_viewtime > 30 & Sessions$movie_total_viewtime <= 60)|(Sessions$series_total_viewtime > 30 & Sessions$series_total_viewtime <= 60)), "31-60",
+                       ifelse(((Sessions$movie_total_viewtime > 60 & Sessions$movie_total_viewtime <= 180)|(Sessions$series_total_viewtime > 60 & Sessions$series_total_viewtime <= 180)), "61-180", 
+                              ifelse(((Sessions$movie_total_viewtime > 180 & Sessions$movie_total_viewtime <= 600)|(Sessions$series_total_viewtime >180 & Sessions$series_total_viewtime <= 600)), "181-600",
+                                     ifelse(((Sessions$movie_total_viewtime > 600 & Sessions$movie_total_viewtime <= 1800)|(Sessions$series_total_viewtime >600 & Sessions$series_total_viewtime <= 1800)), "601-1800","1801+"))))))
+
+# Creating a column that tells if a user casted or not casted
+Sessions$casted <- ifelse(((Sessions$movie_cast_time > 1) | (Sessions$series_cast_time > 1)), "Casted","Not Casted")
+SessionsAggre <- as.data.frame(table(Sessions$duration, Sessions$casted))
+View(SessionsAggre)
+# New custom sorting order
+desired_order <- c("0-10", "11-30", "31-60", "61-180", "181-600", "601-1800", "1801+" )
+# Re-order the levels
+SessionsAggre$Var1 <- factor( as.character(SessionsAggre$Var1), levels=desired_order )
+# Re-order the data.frame
+SessionsAggre <- SessionsAggre[order(SessionsAggre$Var1),]
+
+hchart(SessionsAggre, "column", hcaes(x = Var1, y = Freq , group = Var2)) %>%
+  hc_xAxis(title = list(text = "Session Length")) 
+
+```
+
+
+- Lets see what could be the issue. Is it that majority of days in a week are working days and thats why users are preferring to watch on mobile. Is the casting more during weekends?
+
+```{r, echo = FALSE}
+Data$session_start_ts <- as.Date(Data$session_start_ts)
+Data[is.na(Data)] <- 0
+Data$week <- weekdays(as.Date(Data$session_start_ts, format = "%m/%d/%Y"))
+View(Data)
+require(dplyr)
+TimeLine <- Data[c(2,3,4,5,6,11)] %>% 
+                group_by(session_start_ts) %>%
+                mutate_all(funs(round(. / (60*60), 2))) %>%
+                summarise_each(funs(sum)) %>%
+                mutate(movie_percentage_cast = round((movie_cast_time/movie_total_viewtime) *100, 2) ) %>%
+                mutate(series_percentage_cast = round((series_cast_time/series_total_viewtime) *100, 2) )
+
+
+View(TimeLine)
+
+
+
+TimeLine_week <- Data[3:12] %>% 
+  group_by(week) %>%
+  summarise_each(funs(sum)) %>%
+  mutate(movie_total_viewtime = round(movie_total_viewtime/(60*60), 2)) %>%
+  mutate(series_total_viewtime = round(series_total_viewtime/(60*60), 2)) %>%
+  mutate(movie_cast_time = round(movie_cast_time/(60*60), 2)) %>%
+  mutate(series_cast_time = round(series_cast_time/(60*60), 2)) %>%
+  mutate(session_length = round(session_length/(60*60), 2)) %>%
+  mutate(total_view_time = movie_total_viewtime + series_total_viewtime) %>%    mutate(total_cast_time = movie_cast_time + series_cast_time) %>% mutate(total_percentage = (total_cast_time/total_view_time)*100) %>%
+  mutate(movie_percentage_cast = round((movie_cast_time/movie_total_viewtime) *100, 2) ) %>%
+  mutate(series_percentage_cast = round((series_cast_time/series_total_viewtime) *100, 2) )
+
+View(TimeLine_week)
+```
+
+
+```{r, echo = FALSE}
+weekly_percentage_total<- TimeLine_week[c("week", "total_percentage")]
+hchart(weekly_percentage_total, "column", hcaes(x = week, y = total_percentage))
+
+```
+
+- Now lets look and understand if users are casting movies or series. 
+- We can see from the graph that there is a significant difference in percentage of movies being casted and series casted. 
+- Almost on every weekday, people are more inclined towards casting movies than series
+
+
+```{r, echo = FALSE}
+Time_week <- TimeLine_week[c(1,14,15)]
+x <- gather(Time_week, "type", "percent", col = c(2:3))
+hchart(x, "column", hcaes(x = week, y = percent, group = type))
+
+```
+
+## Time Series Analysis
+
+#### Movies - Total Viewing Time Vs. Total Time Cast
+
+- We can see below that the viewting time overall has always been significantly higher than the cast time. 
+- We can also see that movie viewing time increased in the start of october and the casting time also increased.
+
+```{r, echo=FALSE}
+#Total Movie Time Vs. Total Cast Time
+highchart() %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$movie_total_viewtime, name = "Total Movie View Time") %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$movie_cast_time, name = "Total Movie Cast Time", color = "#c2b2af" ) %>%
+  hc_xAxis(title = list(text = "Time Line")) %>%
+  hc_yAxis(title = list(text = "Hours"))
+```
+
+#### Movies - Percentage time cast of the total viewing time
+
+- The below graph is time line of the percentage of movies casted in two months. Although, the distribution looks uneven, there is a significant rise on 23rd of october, Which could've been for the same reason as above. 
+- Although the distribution looks uneven, there was a huge spike in October, owing to the fact that Tubi tv released a pool of horror films right before halloween on September 23rd.
+[Click here!](http://www.dreadcentral.com/news/190841/tubi-tv-goes-big-halloween-nearly-400-horror-movies-streaming-free/)
+
+
+```{r, echo=FALSE}
+#Percentage of movie cast
+highchart() %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$movie_percentage_cast, name = "Percentage Cast for Movies", color = "#618f56") %>%
+  hc_xAxis(title = list(text = "Time Line")) %>%
+  hc_yAxis(title = list(text = "Percentage Cast"))
+```
+
+
+#### TV Series - Total Viewing Time Vs. Total Time Cast 
+
+- In the graph below we see that, the viewing time increased at the end of septemeber and continued to stay at an overall high with a few ups and downs in between but the casting time saw no increase. Infact it dropped compared to the usual.
+
+```{r, echo=FALSE}
+#View Time Vs. Cast Time over the two months for series
+highchart() %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$series_total_viewtime, name = "Series View Time") %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$series_cast_time, name = "Series Cast Time", color = "#c2b2af" ) %>%
+  hc_xAxis(title = list(text = "Time Line")) %>%
+  hc_yAxis(title = list(text = "Hours"))
+```
+
+#### TV Series - Percentage time cast of the total viewing time
+
+- As mentioned above we can clearly see the time cast as compared to the viewing time  dropped starting october.
+
+
+```{r, echo=FALSE}
+highchart() %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$series_percentage_cast, name = "Percentage Cast for Movies", color = "#618f56") %>%
+  hc_xAxis(title = list(text = "Time Line")) %>%
+  hc_yAxis(title = list(text = "Percentage Cast"))
+```
+
+
+####  Time Cast - Movies Vs. TV Series
+
+- In the below graph, the casting time for movie have always been higher compared to series but has the similar pattern. 
+
+```{r, echo=FALSE}
+highchart() %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$movie_cast_time, name = "Movie Cast Time") %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$series_cast_time, name = "Series Cast Time", color = "#c2b2af" ) %>%
+  hc_xAxis(title = list(text = "Time Line")) %>%
+  hc_yAxis(title = list(text = "Hours"))
+```
+
+
+#### Percentage of time cast - Movies Vs. TV Series
+
+- It supports the fact mentioned above in the previous graph.  
+
+```{r, echo=FALSE}
+highchart() %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$movie_percentage_cast, name = " Movie - (%) of Time Cast") %>%
+  hc_add_series_times_values(TimeLine$session_start_ts, TimeLine$series_percentage_cast, name = "Series - (%) of Time Cast", color = "#c2b2af" ) %>%
+  hc_xAxis(title = list(text = "Time Line")) %>%
+  hc_yAxis(title = list(text = "Hours"))
+
+```
+
+```{r, echo = FALSE}
+#Users who usually cast both movies and series
+UserActivity <- Data %>% select(userid, movie_total_viewtime, movie_cast_time , movie_total_starts, movies_casted, series_total_viewtime, series_cast_time, series_total_starts, episodes_casted) %>% 
+                group_by(userid) %>%
+                summarise_each(funs(sum)) %>%
+                mutate(movie_percentage_cast = round((movie_cast_time/movie_total_viewtime) *100, 2) ) %>%
+                mutate(series_percentage_cast = round((series_cast_time/series_total_viewtime) *100, 2) ) %>%
+                filter(is.nan(movie_percentage_cast) == FALSE & is.nan(series_percentage_cast) == FALSE) %>%
+                filter(movie_percentage_cast <= 100 | series_percentage_cast <= 100)
+```
+
+## Does more movies starts result in more movies casted?
+
+- There is a slightly positive coorelation between movies started and movies casted.
+
+```{r, echo = FALSE}
+hchart(UserActivity, "scatter", hcaes(x = movie_total_starts , y = movies_casted)) %>%
+   hc_xAxis(title = list(text = "Number of movies started")) %>%
+   hc_yAxis(title = list(text = "Number of movies casted"))
+```
+
+## Recommendations:
+
+- Since movies view time and cast time are more than series view time and cast time, releasing more movies would make users attracted to our app.
+- Since users are not watching series much when compared to movies, you might want to increase the collection of series preferrebly with the tastes of the users. 
+- Seasonal release of movie content is alsoone of the reason of for movie view time and cast time. Hence, releasing seasonal content could help us improve the casting performance. 
+- If additional data like demographics of users, types of devices they used and genres of movies and series they watched or casted was available then we could've analyzed and found region specific,device specific behaviors. This would help us a lot in improving our casting performance.
+- Below is one such hypothesis that could help Tubitv to improve casting performance.
+
+
+I realized that when a user registers for our Tubi Tv app, it doesn't ask him/her what kind of genre movies or series they would prefer to watch. Since it is a new AVOD service, we will have less data in the initial stages and knowing as much as we can, about users, would help us give them best service and increase customer acquisitions and ultimately conversion rates. 
+
+###Problem:
+The problem to solve here is, improving the use of casting through Tubitv app. A research by Netflix says that a user spends an average of 60 - 90 seconds on browsing a catalog of movies. We have to make it efficient enough that a user can gets his/her preferred movies or videos within 90 seconds. So if we ask a user during registration or after registration to choose their priorities of genres and publish the recommended content on home screen based on their preferred choices, the use of casting might increase. We can also combine their choices with their search keywords and recommend videos based on that. So we can perform an A/B testing experiment on our site or app and determine if there is a significant change in casting behavior. 
+
+####Hypothesis: 
+Asking a user about their preferred genres during registration and displaying movies or videos list as per their preferences would increase the use of casting.
+
+#####Action: 
+-	Perform A/B testing. Since this is a larger change, we need large sample to get a statistically reliable outcome. 
+-	We can perform this on new users. We will divide the users into two equal groups randomly with similar demographics. One is a control group who receive the older version which doesn't ask for preferred genres while the other experimental group receives the newer version which asks for preferred genres and displays the content accordingly. 
+- Based on their behavior we can measure casting using a metric.
+- The metric can be the probability of user casting given the new version of home screen vs the probablity of user casting given the older version. we can also calculate the percentage of users casted given new version of home screen vs the percentage of users casted given the older version
+- This tells us if there is significant difference and helps us take necessary action. 
